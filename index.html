@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Combiner</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.10.377/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.14.0/Sortable.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+    <style>
+        /* Existing styles remain the same */
+        body {
+            background-color: #f3f4f6;
+            padding: 1.5rem;
+            display: flex;
+            position: relative;
+        }
+        #sidebar {
+            width: 250px;
+            background-color: #f3f4f6;
+            padding: 10px;
+            border-right: 1px solid #ccc;
+            overflow-y: auto;
+            max-height: 90vh;
+        }
+        .container {
+            margin-left: 1.5rem;
+            flex: 1;
+        }
+        h1 {
+            font-size: 1.5rem;
+            font-weight: bold;
+            margin-bottom: 1rem;
+        }
+        h2 {
+            font-size: 1.125rem;
+            font-weight: bold;
+            margin-bottom: 1rem;
+        }
+        h3 {
+            font-size: 0.875rem;
+            font-weight: 500;
+            margin-bottom: 0.5rem;
+        }
+        button {
+            background-color: #3b82f6;
+            color: white;
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 0.25rem;
+            cursor: pointer;
+            margin-left: 0.5rem;
+        }
+        button:hover {
+            background-color: #2563eb;
+        }
+        button:disabled {
+            background-color: #93c5fd;
+            cursor: not-allowed;
+        }
+        #pdf-thumbnails {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 1rem;
+        }
+        .thumbnail-container {
+            width: 150px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            padding: 5px;
+            position: relative;
+        }
+        .thumbnail {
+            width: 100%;
+            height: auto;
+            border-radius: 4px;
+        }
+        .page-number {
+            font-size: 0.8rem;
+            color: #555;
+        }
+        #file {
+            margin-right: 0.5rem;
+            width: 0.1px;
+            height: 0.1px;
+            opacity: 0;
+            overflow: hidden;
+            position: absolute;
+            z-index: -1;
+        }
+        #file + label {
+            background-color: #3b82f6;
+            color: white;
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 0.25rem;
+            cursor: pointer;
+            margin-left: 0.5rem;
+        }
+        #toolbar {
+            margin-bottom: 0.5rem;
+        }
+        .delete-button {
+            background-color: #ef4444;
+            color: white;
+            border: none;
+            border-radius: 0.25rem;
+            cursor: pointer;
+            display: none;
+            position: absolute;
+            top: 5px;
+            right: 5px;
+        }
+        .sidebar-item {
+            position: relative;
+            margin-bottom: 1rem;
+        }
+        .sidebar-item:hover .delete-button {
+            display: block;
+        }
+
+        /* Enhanced loading overlay styles */
+        #loading-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        .loading-content {
+            background-color: white;
+            padding: 2rem;
+            border-radius: 0.5rem;
+            text-align: center;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3b82f6;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1rem;
+        }
+        .progress-text {
+            margin-top: 0.5rem;
+            font-size: 0.875rem;
+            color: #666;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <!-- Enhanced loading overlay -->
+    <div id="loading-overlay">
+        <div class="loading-content">
+            <div class="spinner"></div>
+            <p id="loading-message">Processing...</p>
+            <p id="progress-text" class="progress-text"></p>
+        </div>
+    </div>
+
+    <!-- Rest of the content remains the same -->
+    <div id="sidebar">
+        <h2>Uploaded PDFs</h2>
+        <div id="file-list"></div>
+    </div>
+    <div class="container">
+        <h1>PDF Combiner</h1>
+        <div class="flex mb-4" id="toolbar">
+            <input type="file" id="file" accept="application/pdf" multiple/>
+            <label for="file">Choose a file</label>
+            <button id="save-button">Save</button>
+            <button id="clear-button">Clear</button>
+        </div>
+        <div id="pdf-thumbnails" class="sortable"></div>
+    </div>
+
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.10.377/pdf.worker.min.js';
+
+        const thumbnailMap = new Map();
+        const fileInput = document.getElementById('file');
+        const pdfThumbnails = document.getElementById('pdf-thumbnails');
+        const fileList = document.getElementById('file-list');
+        const saveButton = document.getElementById('save-button');
+        const clearButton = document.getElementById('clear-button');
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const loadingMessage = document.getElementById('loading-message');
+        const progressText = document.getElementById('progress-text');
+        let pdfFiles = [];
+        let totalPageCount = 0;
+
+        function showLoading(message, showProgress = false) {
+            loadingOverlay.style.display = 'flex';
+            loadingMessage.textContent = message;
+            progressText.style.display = showProgress ? 'block' : 'none';
+            progressText.textContent = '';
+            saveButton.disabled = true;
+            clearButton.disabled = true;
+            fileInput.disabled = true;
+        }
+
+        function updateProgress(current, total) {
+            const percentage = Math.round((current / total) * 100);
+            progressText.textContent = `Processing page ${current} of ${total} (${percentage}%)`;
+        }
+
+        function hideLoading() {
+            loadingOverlay.style.display = 'none';
+            loadingMessage.textContent = 'Processing...';
+            progressText.textContent = '';
+            saveButton.disabled = false;
+            clearButton.disabled = false;
+            fileInput.disabled = false;
+        }
+
+        fileInput.addEventListener('change', async (event) => {
+            const files = Array.from(event.target.files);
+            if (files.length === 0) return;
+
+            showLoading('Loading PDF files...', true);
+            let processedFiles = 0;
+            let totalPages = 0;
+
+            try {
+                // First, count total pages
+                for (const file of files) {
+                    if (file.type === 'application/pdf') {
+                        const fileBytes = await file.arrayBuffer();
+                        const pdfDoc = await pdfjsLib.getDocument({ data: fileBytes }).promise;
+                        totalPages += pdfDoc.numPages;
+                    }
+                }
+
+                let processedPages = 0;
+
+                // Then process each file
+                for (const file of files) {
+                    if (file && file.type === 'application/pdf') {
+                        const fileBytes = await file.arrayBuffer();
+                        const pdfDoc = await pdfjsLib.getDocument({ data: fileBytes }).promise;
+                        pdfFiles.push({ 
+                            name: file.name, 
+                            doc: pdfDoc, 
+                            bytes: fileBytes 
+                        });
+
+                        displayFileInSidebar(file.name, pdfDoc, fileBytes);
+                        
+                        // Render pages with progress
+                        for (let i = 1; i <= pdfDoc.numPages; i++) {
+                            await renderPageThumbnail(pdfDoc, i, fileBytes, Math.random().toString(36).substring(7));
+                            processedPages++;
+                            updateProgress(processedPages, totalPages);
+                        }
+
+                        processedFiles++;
+                    }
+                }
+            } catch (error) {
+                console.error('Error processing PDF:', error);
+                alert('Error processing PDF files. Please try again.');
+            } finally {
+                hideLoading();
+            }
+        });
+
+        function displayFileInSidebar(fileName, pdfDoc, fileBytes) {
+            const fileItem = document.createElement('div');
+            fileItem.className = 'sidebar-item';
+            const fileTitle = document.createElement('h3');
+            fileTitle.textContent = fileName;
+
+            const coverCanvas = document.createElement('canvas');
+            coverCanvas.className = 'w-full h-auto my-2';
+            renderFirstPageThumbnail(pdfDoc, coverCanvas);
+
+            const deleteButton = document.createElement('button');
+            deleteButton.textContent = 'X';
+            deleteButton.className = 'delete-button';
+            deleteButton.onclick = () => {
+                fileItem.remove();
+                pdfFiles = pdfFiles.filter(file => file.doc !== pdfDoc);
+                const relatedThumbnails = Array.from(pdfThumbnails.children).filter(
+                    thumb => thumbnailMap.get(thumb).docId === pdfDoc.docId
+                );
+                relatedThumbnails.forEach(thumb => thumb.remove());
+                totalPageCount -= pdfDoc.numPages;
+            };
+
+            fileItem.appendChild(fileTitle);
+            fileItem.appendChild(coverCanvas);
+            fileItem.appendChild(deleteButton);
+            fileList.appendChild(fileItem);
+        }
+
+        async function renderFirstPageThumbnail(pdfDoc, canvas) {
+            const page = await pdfDoc.getPage(1);
+            const scale = 0.2;
+            const viewport = page.getViewport({ scale });
+            const context = canvas.getContext('2d');
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+            await page.render({ canvasContext: context, viewport }).promise;
+        }
+
+        async function renderAllPages(pdfDoc, fileBytes) {
+            const pageCount = pdfDoc.numPages;
+            const docId = Math.random().toString(36).substring(7);
+            
+            for (let i = 1; i <= pageCount; i++) {
+                totalPageCount++;
+                await renderPageThumbnail(pdfDoc, i, fileBytes, docId);
+            }
+        }
+
+        async function renderPageThumbnail(pdfDoc, pageNum, fileBytes, docId) {
+            const page = await pdfDoc.getPage(pageNum);
+            const scale = 0.3;
+            const viewport = page.getViewport({ scale });
+
+            const canvas = document.createElement('canvas');
+            canvas.className = 'thumbnail';
+            const context = canvas.getContext('2d');
+            canvas.height = viewport.height;
+            canvas.width = viewport.width;
+
+            await page.render({ canvasContext: context, viewport }).promise;
+
+            const thumbnailContainer = document.createElement('div');
+            thumbnailContainer.className = 'thumbnail-container';
+            thumbnailContainer.dataset.pageNum = pageNum;
+
+            thumbnailMap.set(thumbnailContainer, {
+                bytes: fileBytes,
+                docId: docId,
+                pageNum: pageNum
+            });
+
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.className = 'mb-1';
+            checkbox.checked = true;
+
+            const pageNumberLabel = document.createElement('div');
+            pageNumberLabel.className = 'page-number';
+            pageNumberLabel.textContent = `Page ${totalPageCount}`;
+
+            thumbnailContainer.appendChild(checkbox);
+            thumbnailContainer.appendChild(canvas);
+            thumbnailContainer.appendChild(pageNumberLabel);
+
+            pdfThumbnails.appendChild(thumbnailContainer);
+        }
+
+        new Sortable(pdfThumbnails, {
+            animation: 150,
+            ghostClass: 'sortable-ghost',
+            chosenClass: 'sortable-chosen'
+        });
+
+        async function saveAsPDF() {
+            try {
+                showLoading('Combining PDFs...', true);
+                
+                const { PDFDocument } = PDFLib;
+                const newPdfDoc = await PDFDocument.create();
+                
+                const sortedThumbnails = Array.from(pdfThumbnails.children)
+                    .filter(thumbnail => thumbnail.querySelector('input[type="checkbox"]').checked);
+
+                if (sortedThumbnails.length === 0) {
+                    alert('Please select at least one page to save.');
+                    hideLoading();
+                    return;
+                }
+
+                const totalPages = sortedThumbnails.length;
+                let processedPages = 0;
+
+                // Group pages by source PDF
+                const groupedPages = new Map();
+                sortedThumbnails.forEach((thumbnail, index) => {
+                    const pageData = thumbnailMap.get(thumbnail);
+                    if (!pageData || !pageData.bytes) return;
+                    
+                    const key = pageData.bytes;
+                    if (!groupedPages.has(key)) {
+                        groupedPages.set(key, []);
+                    }
+                    groupedPages.get(key).push({
+                        pageNum: pageData.pageNum - 1,
+                        thumbnailIndex: index
+                    });
+                });
+
+                const pagePromises = Array(sortedThumbnails.length).fill(null);
+                const processingPromises = [];
+
+                for (const [pdfBytes, pages] of groupedPages.entries()) {
+                    processingPromises.push((async () => {
+                        const sourceDoc = await PDFDocument.load(pdfBytes);
+                        const copiedPages = await newPdfDoc.copyPages(sourceDoc, pages.map(p => p.pageNum));
+                        
+                        pages.forEach((page, i) => {
+                            pagePromises[page.thumbnailIndex] = copiedPages[i];
+                            processedPages++;
+                            updateProgress(processedPages, totalPages);
+                        });
+                    })());
+                }
+
+                await Promise.all(processingPromises);
+
+                for (const page of pagePromises) {
+                    if (page) newPdfDoc.addPage(page);
+                }
+
+                const newPdfBytes = await newPdfDoc.save({
+                    useObjectStreams: false,
+                    additionalLookups: false
+                });
+                
+                const blob = new Blob([newPdfBytes.buffer], { type: 'application/pdf' });
+                const url = URL.createObjectURL(blob);
+
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = 'combined.pdf';
+                link.click();
+                
+                setTimeout(() => URL.revokeObjectURL(url), 100);
+                hideLoading();
+            } catch (error) {
+                console.error('Error saving PDF:', error);
+                alert('Error saving PDF. Please try again.');
+                hideLoading();
+            }
+        }
+
+        saveButton.addEventListener('click', saveAsPDF);
+
+        clearButton.addEventListener('click', () => {
+            pdfThumbnails.innerHTML = '';
+            fileList.innerHTML = '';
+            pdfFiles = [];
+            thumbnailMap.clear();
+            totalPageCount = 0;
+        });    </script>
+</body>
+</html>
+
